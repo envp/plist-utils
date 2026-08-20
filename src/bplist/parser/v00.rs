@@ -4,7 +4,7 @@ use std::{collections::HashMap, slice::Chunks};
 use nom::{
     combinator::{all_consuming, fail, map},
     number::complete::{be_f32, be_f64, be_i128, be_i64, be_u16, be_u32, be_u8},
-    IResult,
+    IResult, Parser,
 };
 
 use crate::bplist::{errors::ParseError, parser::Object, parser::Trailer, types::ParseResult};
@@ -158,16 +158,15 @@ fn create_null_or_bool<'buf>(byte: u8) -> Result<UnresolvedObject<'buf>, ParseEr
 /// 2. Interprets 8, 16 byte integers are interpreted as signed
 /// 3. Fail if numbers wider than 16 bytes are provided
 fn create_integer<'buf>(width: u8, data: &'buf [u8]) -> Result<UnresolvedObject<'_>, ParseError> {
-    let parser: Box<dyn FnMut(&'buf [u8]) -> IResult<&'_ [u8], Object>> = match width {
-        1 => Box::new(map(be_u8, |r| Object::UnsignedInteger(r.into()))),
-        2 => Box::new(map(be_u16, |r| Object::UnsignedInteger(r.into()))),
-        4 => Box::new(map(be_u32, Object::UnsignedInteger)),
-        8 => Box::new(map(be_i64, |r| Object::SignedInteger(r.into()))),
-        16 => Box::new(map(be_i128, Object::SignedInteger)),
-        _ => Box::new(fail),
+    let result: IResult<&[u8], Object> = match width {
+        1 => all_consuming(map(be_u8, |r| Object::UnsignedInteger(r.into()))).parse(data),
+        2 => all_consuming(map(be_u16, |r| Object::UnsignedInteger(r.into()))).parse(data),
+        4 => all_consuming(map(be_u32, Object::UnsignedInteger)).parse(data),
+        8 => all_consuming(map(be_i64, |r| Object::SignedInteger(r.into()))).parse(data),
+        16 => all_consuming(map(be_i128, Object::SignedInteger)).parse(data),
+        _ => all_consuming(fail()).parse(data),
     };
-    let (_, obj) = all_consuming(parser)(data)
-        .map_err(|_| ParseError::InvalidInteger(width, data.to_vec()))?;
+    let (_, obj) = result.map_err(|_| ParseError::InvalidInteger(width, data.to_vec()))?;
     Ok(UnresolvedObject::wrap(obj))
 }
 
@@ -175,13 +174,12 @@ fn create_integer<'buf>(width: u8, data: &'buf [u8]) -> Result<UnresolvedObject<
 /// least `width` bytes wide. This parser will check if all of the buffer is
 /// consumed in the process of creating a float.
 fn create_realnum<'buf>(width: u8, data: &'buf [u8]) -> Result<UnresolvedObject<'_>, ParseError> {
-    let parser: Box<dyn FnMut(&'buf [u8]) -> IResult<&'_ [u8], Object>> = match width {
-        4 => Box::new(map(be_f32, |r| Object::Real(r.into()))),
-        8 => Box::new(map(be_f64, Object::Real)),
-        _ => Box::new(fail),
+    let result: IResult<&[u8], Object> = match width {
+        4 => all_consuming(map(be_f32, |r| Object::Real(r.into()))).parse(data),
+        8 => all_consuming(map(be_f64, Object::Real)).parse(data),
+        _ => all_consuming(fail()).parse(data),
     };
-    let (_, obj) =
-        all_consuming(parser)(data).map_err(|_| ParseError::InvalidFloat(width, data.to_vec()))?;
+    let (_, obj) = result.map_err(|_| ParseError::InvalidFloat(width, data.to_vec()))?;
     Ok(UnresolvedObject::wrap(obj))
 }
 
@@ -195,8 +193,9 @@ fn create_date<'buf>(data: &'buf [u8]) -> Result<UnresolvedObject<'_>, ParseErro
     // NOTE: This name is bound to f64 so that the Error type of be_f64 can be
     // inferred. Without this we end up with E0283
     let read_f64: fn(&'buf [u8]) -> IResult<&'_ [u8], f64> = be_f64;
-    let (_, cf_date) =
-        all_consuming(read_f64)(data).map_err(|_| ParseError::InvalidDate(data.to_owned()))?;
+    let (_, cf_date) = all_consuming(read_f64)
+        .parse(data)
+        .map_err(|_| ParseError::InvalidDate(data.to_owned()))?;
     const SECONDS_BETWEEN_CF_AND_UNIX_EPOCH: f64 = 978_307_200.0;
     let unix_date_offset: f64 = cf_date + SECONDS_BETWEEN_CF_AND_UNIX_EPOCH;
     Ok(UnresolvedObject::wrap(Object::DateTime(unix_date_offset)))
@@ -222,10 +221,10 @@ fn read_size<'buf>(data: &'buf [u8]) -> ParseResult<&'_ [u8], usize> {
     let width = 1 << (data[0] & 0x0f);
     let content = &data[1..];
     let result: IResult<&'buf [u8], usize> = match width {
-        1 => map(be_u8, |r| r as usize)(content),
-        2 => map(be_u16, |r| r as usize)(content),
-        4 => map(be_u32, |r| r as usize)(content),
-        _ => fail(content),
+        1 => map(be_u8, |r| r as usize).parse(content),
+        2 => map(be_u16, |r| r as usize).parse(content),
+        4 => map(be_u32, |r| r as usize).parse(content),
+        _ => fail().parse(content),
     };
 
     result.map_err(|_| ParseError::InvalidInteger(width, content[..width.into()].to_vec()))

@@ -1,6 +1,7 @@
 use nom::{
     bytes::complete::{tag, take},
     number::complete::be_u64,
+    Parser,
 };
 
 use crate::bplist::{
@@ -49,7 +50,7 @@ pub struct Trailer {
 /// Read the next `N` bytes from the inputs stream, advancing it in the
 /// process, returns a sized slice containing the bytes read.
 fn take_n<const N: usize>(input: &[u8]) -> ParseResult<&'_ [u8], [u8; N]> {
-    let (rest, data) = take(N)(input).map_err(file_too_short(N))?;
+    let (rest, data) = take(N).parse(input).map_err(file_too_short(N))?;
     let mut sized_data: [u8; N] = [0; N];
     for (dest, src) in sized_data.iter_mut().zip(data) {
         *dest = *src;
@@ -72,8 +73,10 @@ fn take_be_u64(input: &[u8]) -> ParseResult<&'_ [u8], u64> {
 /// - `bplist15`: `[0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x31, 0x35]`
 /// - `bplist16`: `[0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x31, 0x36]`
 fn parse_header(buffer: &[u8]) -> ParseResult<&'_ [u8], Header> {
-    let (rest, _) = tag(b"bplist")(buffer).map_err(invalid_header())?;
-    let (rest, version_bytes) = take(2usize)(rest).map_err(file_too_short(2))?;
+    let (rest, _) = tag(&b"bplist"[..])
+        .parse(buffer)
+        .map_err(invalid_header())?;
+    let (rest, version_bytes) = take(2usize).parse(rest).map_err(file_too_short(2))?;
 
     let version = match version_bytes {
         b"00" => Ok(Version::V00),
@@ -90,7 +93,7 @@ fn parse_trailer(buffer: &[u8]) -> ParseResult<&'_ [u8], Trailer> {
     // The first 5 bytes are unused, and they are
     // followed by 3 single byte fields:
     // sort_version, offset_int_size, object_ref_size
-    let (rest, _) = take(5usize)(buffer).map_err(file_too_short(5))?;
+    let (rest, _) = take(5usize).parse(buffer).map_err(file_too_short(5))?;
     let (rest, [sort_version, offset_int_size, object_ref_size]) = take_n::<3>(rest)?;
     let (rest, num_objects) = take_be_u64(rest).map(|(r, word)| (r, word as usize))?;
     let (rest, top_object_idx) = take_be_u64(rest)?;
